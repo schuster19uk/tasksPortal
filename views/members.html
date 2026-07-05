@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Member Management — Collaborators Booking Portal</title>
+    <link rel="stylesheet" href="/css/theme.css">
+    <link rel="stylesheet" href="/css/navbar.css">
+    <link rel="stylesheet" href="/css/modal.css">
+    <link rel="stylesheet" href="/css/members.css">
+    <link rel="stylesheet" href="/css/footer.css">
+     <link rel="stylesheet" href="/css/cred-box.css">
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+    <a href="/" class="navbar-brand">
+        <span class="brand-dot"></span>
+        Member Management
+    </a>
+    <div class="navbar-actions">
+        <a href="/manage" class="btn-view-public">← Dashboard</a>
+        <button id="logoutBtn" class="btn-logout">Logout</button>
+    </div>
+</nav>
+
+<div class="members-page">
+
+    <!-- Page header -->
+    <div class="page-header">
+        <h1 class="page-title">Project <span>Members</span></h1>
+        <button class="btn btn-primary btn-lg" onclick="openAddModal()">+ Add Member</button>
+    </div>
+
+    <!-- Stats strip -->
+    <div class="stats-strip">
+        <div class="stat-chip">
+            <div class="stat-chip-val" id="statTotal">—</div>
+            <div class="stat-chip-label">Total</div>
+        </div>
+        <div class="stat-chip">
+            <div class="stat-chip-val" id="statActive" style="color:var(--success)">—</div>
+            <div class="stat-chip-label">Active</div>
+        </div>
+        <div class="stat-chip">
+            <div class="stat-chip-val" id="statWithLogin" style="color:var(--info)">—</div>
+            <div class="stat-chip-label">Portal Logins</div>
+        </div>
+        <div class="stat-chip">
+            <div class="stat-chip-val" id="statInactive" style="color:var(--text-muted)">—</div>
+            <div class="stat-chip-label">Inactive</div>
+        </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="members-toolbar">
+        <input class="search-box" type="text" id="searchInput" placeholder="Search name, username, Discord…">
+        <div class="filter-group" id="filterGroup">
+            <button class="pill active" data-filter="all">All</button>
+            <button class="pill" data-filter="active">Active</button>
+            <button class="pill" data-filter="inactive">Inactive</button>
+            <button class="pill" data-filter="login">Has Login</button>
+            <button class="pill" data-filter="no-login">No Login</button>
+        </div>
+    </div>
+
+    <!-- Members table -->
+    <div class="members-table-wrap">
+        <table class="members-table">
+            <thead>
+                <tr>
+                    <th>Member</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Portal Login</th>
+                    <th>Last Seen</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="membersBody">
+                <tr><td colspan="6"><div class="loading">Loading members…</div></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════
+     ADD MEMBER MODAL
+     No password fields — server generates it.
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="addModal">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-title">// add_member</div>
+            <button class="modal-close" onclick="closeModal('addModal')">&#x2715;</button>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Display Name *</label>
+            <input type="text" class="form-control" id="add_name" placeholder="Full name or nickname">
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Username <span class="form-help">(portal login)</span></label>
+                <input type="text" class="form-control" id="add_username" placeholder="Optional" autocomplete="off">
+                <div class="form-help">A password will be auto-generated if set.</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Member Type *</label>
+                <select class="form-control" id="add_type"></select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Discord ID</label>
+            <input type="text" class="form-control" id="add_discord" placeholder="e.g. 123456789012345678" autocomplete="off">
+        </div>
+
+        <div class="form-group" style="display:flex;align-items:center;gap:var(--space-3)">
+            <input type="checkbox" id="add_active" checked style="accent-color:var(--accent);width:16px;height:16px;">
+            <label for="add_active" style="font-size:0.85rem;color:var(--text-secondary);cursor:pointer">Active member</label>
+        </div>
+
+        <div class="inline-error" id="add_error"></div>
+
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="closeModal('addModal')">Cancel</button>
+            <button class="btn btn-primary" id="add_submit_btn" onclick="submitAdd()">Add Member</button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     CREDENTIAL REVEAL MODAL
+     Shown exactly once after member creation
+     or password reset. Non-dismissable until
+     the admin confirms they've copied it.
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="credModal">
+    <div class="modal" style="max-width:480px">
+        <div class="modal-header">
+            <div class="modal-title" id="cred_modal_title">// credentials</div>
+            <!-- Intentionally no X close button — must confirm copied -->
+        </div>
+
+        <div class="warn-banner">
+            <strong>⚠ Save these credentials now</strong>
+            This password will not be shown again and is not stored anywhere in plain text.
+            Share it with the member securely before closing this window.
+        </div>
+
+        <div class="cred-box">
+            <div class="cred-label">Username</div>
+            <div class="cred-value" id="cred_username">—</div>
+            <div class="cred-copy-row">
+                <button class="cred-copy-btn" onclick="copyField('cred_username', this)">Copy username</button>
+            </div>
+        </div>
+
+        <div class="cred-box">
+            <div class="cred-label">Password (auto-generated)</div>
+            <div class="cred-value pw-value" id="cred_password">—</div>
+            <div class="cred-copy-row">
+                <button class="cred-copy-btn" onclick="copyField('cred_password', this)">Copy password</button>
+                <button class="cred-copy-btn" onclick="copyBoth()">Copy both</button>
+            </div>
+        </div>
+
+        <div class="confirm-copied-row">
+            <input type="checkbox" id="cred_confirm_check" onchange="toggleCredClose()">
+            <label for="cred_confirm_check">I have copied and securely shared these credentials</label>
+        </div>
+
+        <div class="modal-footer">
+            <button class="btn btn-primary" id="cred_close_btn" onclick="closeCredModal()" disabled
+                    style="opacity:0.4;cursor:not-allowed">
+                Done — close
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     EDIT MEMBER MODAL
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="editModal">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-title">// edit_member</div>
+            <button class="modal-close" onclick="closeModal('editModal')">&#x2715;</button>
+        </div>
+
+        <input type="hidden" id="edit_id">
+
+        <div class="form-group">
+            <label class="form-label">Display Name *</label>
+            <input type="text" class="form-control" id="edit_name">
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" class="form-control" id="edit_username" autocomplete="off">
+                <div class="form-help">Clear to remove portal access.</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Member Type *</label>
+                <select class="form-control" id="edit_type"></select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Discord ID</label>
+            <input type="text" class="form-control" id="edit_discord" autocomplete="off">
+        </div>
+
+        <div class="form-group" style="display:flex;align-items:center;gap:var(--space-3)">
+            <input type="checkbox" id="edit_active" style="accent-color:var(--accent);width:16px;height:16px;">
+            <label for="edit_active" style="font-size:0.85rem;color:var(--text-secondary);cursor:pointer">Active member</label>
+        </div>
+
+        <div class="inline-error"   id="edit_error"></div>
+        <div class="inline-success" id="edit_success"></div>
+
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="closeModal('editModal')">Cancel</button>
+            <button class="btn btn-primary" onclick="submitEdit()">Save Changes</button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     RESET PASSWORD CONFIRM MODAL
+     Single confirmation step before generating
+     a new password — which shows in credModal.
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="resetPwModal">
+    <div class="modal" style="max-width:420px">
+        <div class="modal-header">
+            <div class="modal-title">// reset_password</div>
+            <button class="modal-close" onclick="closeModal('resetPwModal')">&#x2715;</button>
+        </div>
+        <input type="hidden" id="reset_pw_id">
+        <p style="font-size:0.88rem;color:var(--text-secondary);line-height:1.6;margin-bottom:var(--space-5)">
+            Generate a new random password for
+            <strong id="reset_pw_name" style="color:var(--text)"></strong>?
+            <br><br>
+            Their existing password will be invalidated immediately.
+            The new password will be shown once — make sure you're ready to share it.
+        </p>
+        <div class="inline-error" id="reset_pw_error"></div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="closeModal('resetPwModal')">Cancel</button>
+            <button class="btn btn-warn" id="reset_pw_submit" onclick="submitResetPassword()">Generate New Password</button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     CONFIRM DELETE MODAL
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="deleteModal">
+    <div class="modal" style="max-width:400px">
+        <div class="modal-header">
+            <div class="modal-title">// confirm_delete</div>
+            <button class="modal-close" onclick="closeModal('deleteModal')">&#x2715;</button>
+        </div>
+        <input type="hidden" id="delete_id">
+        <p style="font-size:0.88rem;color:var(--text-secondary);line-height:1.6;margin-bottom:var(--space-5)">
+            Delete <strong id="delete_name" style="color:var(--text)"></strong>?
+            <br>If they have linked records (tasks, bookings), this will fail — deactivate them instead.
+        </p>
+        <div class="inline-error" id="delete_error"></div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="closeModal('deleteModal')">Cancel</button>
+            <button class="btn btn-danger" onclick="submitDelete()">Delete Member</button>
+        </div>
+    </div>
+</div>
+
+<div id="footer-container"></div>
+<script src="../js/loader.js"></script>
+
+<script src="../js/members.js"></script>
+</body>
+</html>
