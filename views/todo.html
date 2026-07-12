@@ -70,6 +70,12 @@
         onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); quickCreateTask(); }"></textarea>
     </div>
  
+    <!-- ADMIN TOOLS (project creation) — hidden by default, shown only for admin/owner roles -->
+    <div class="admin-tools-bar" id="adminProjectSection" style="display: none; gap: var(--space-3, 12px); padding: var(--space-4, 16px); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); align-items: center; justify-content: space-between; margin-bottom: var(--space-4, 16px);">
+        <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted);">Admin Tools</div>
+        <button class="btn btn-secondary" onclick="openNewProjectModal()">+ New Project</button>
+    </div>
+
     <div class="toolbar">
         <div class="toolbar-left">
             <div class="filter-group" id="statusFilters">
@@ -280,6 +286,32 @@
 <script src="./js/theme.js"></script>
 <script src="./js/todo.js"></script>
  
+<script>
+// ── Admin-only "New Project" section ────────────────────────────────────
+// todo.js sets the global `loggedInUser` after fetching /api/todo/me, but that
+// fetch happens asynchronously, so poll briefly for it rather than assuming
+// it's ready. Defaults to hidden if the role can never be confirmed.
+(function () {
+    function isAdminRole(user) {
+        if (!user || !user.type_name) return false;
+        const t = user.type_name.toLowerCase();
+        return t === 'admin' || t === 'owner';
+    }
+
+    let attempts = 0;
+    function _checkAdmin() {
+        attempts++;
+        if (typeof loggedInUser !== 'undefined' && loggedInUser) {
+            const section = document.getElementById('adminProjectSection');
+            if (section) section.style.display = isAdminRole(loggedInUser) ? 'flex' : 'none';
+            return;
+        }
+        if (attempts < 100) setTimeout(_checkAdmin, 50); // give up after ~5s, stays hidden
+    }
+    _checkAdmin();
+})();
+</script>
+
 <script>
 // ── Assignee pills ────────────────────────────────────────────────────────
 (function () {

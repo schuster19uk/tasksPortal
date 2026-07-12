@@ -56,6 +56,16 @@ const memberAuth = (req, res, next) => {
     res.status(401).json({ error: 'Portal authentication required.' });
 };
 
+// ── 3. PROJECT ADMIN MIDDLEWARE (restricts project creation to admin/owner) ─
+// Must run after memberAuth (relies on req.session.memberTypeName being set).
+const projectAdminAuth = (req, res, next) => {
+    const typeName = (req.session.memberTypeName || '').toLowerCase();
+    if (typeName === 'admin' || typeName === 'owner') {
+        return next();
+    }
+    res.status(403).send('Only admins can create projects.');
+};
+
 
 // ── ADD THIS: MOUNT THE MEMBERS ROUTER WITH AUTH MIDDLEWARE ────────────────
 const membersRouter = require('./routes/members');
@@ -360,7 +370,8 @@ app.get('/api/todo/projects', memberAuth, async (req, res) => {
 
 
 // ── ADD THIS NEW POST ENDPOINT RIGHT HERE ─────────────────────────────────
-app.post('/api/todo/projects', memberAuth, async (req, res) => {
+// Restricted to admins/owners — memberAuth confirms identity, projectAdminAuth confirms role.
+app.post('/api/todo/projects', memberAuth, projectAdminAuth, async (req, res) => {
     // Extract both variables from the incoming request body
     const { projectName, description } = req.body;
     
