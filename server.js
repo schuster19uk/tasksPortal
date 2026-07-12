@@ -256,7 +256,9 @@ app.get('/api/todo/tasks', memberAuth, async (req, res) => {
                     pt.project_id,
                     pm.display_name AS assignee_name,
                     pm.member_id    AS assignee_id,
-                    p.project_name
+                    p.project_name,
+                    (SELECT COUNT(*) FROM project_task_notes ptn
+                       WHERE ptn.task_id = pt.task_id AND ptn.is_deleted = FALSE) AS notes_count
                 FROM project_tasks pt
                 LEFT JOIN project_members pm ON pt.assignee_id = pm.member_id
                 LEFT JOIN lk_member_types lmt ON pm.type_id = lmt.type_id
@@ -275,7 +277,9 @@ app.get('/api/todo/tasks', memberAuth, async (req, res) => {
                     pt.project_id,
                     pm.display_name AS assignee_name,
                     pm.member_id    AS assignee_id,
-                    p.project_name
+                    p.project_name,
+                    (SELECT COUNT(*) FROM project_task_notes ptn
+                       WHERE ptn.task_id = pt.task_id AND ptn.is_deleted = FALSE) AS notes_count
                 FROM project_tasks pt
                 LEFT JOIN project_members pm ON pt.assignee_id = pm.member_id
                 LEFT JOIN lk_member_types lmt ON pm.type_id = lmt.type_id
@@ -295,7 +299,9 @@ app.get('/api/todo/tasks', memberAuth, async (req, res) => {
                     pt.project_id,
                     pm.display_name AS assignee_name,
                     pm.member_id    AS assignee_id,
-                    p.project_name
+                    p.project_name,
+                    (SELECT COUNT(*) FROM project_task_notes ptn
+                       WHERE ptn.task_id = pt.task_id AND ptn.is_deleted = FALSE) AS notes_count
                 FROM project_tasks pt
                 LEFT JOIN project_members pm ON pt.assignee_id = pm.member_id
                 LEFT JOIN lk_member_types lmt ON pm.type_id = lmt.type_id
@@ -308,6 +314,10 @@ app.get('/api/todo/tasks', memberAuth, async (req, res) => {
                 ORDER BY pt.priority_id ASC, pt.created_at DESC
             `, [memberId]);
         }
+
+        // notes_count comes back from COUNT(*) as a BIGINT — the mariadb driver can
+        // surface that as a native BigInt, which JSON.stringify can't serialize. Normalize it.
+        rows = rows.map(r => ({ ...r, notes_count: Number(r.notes_count || 0) }));
 
         res.json(rows);
     } catch (err) {
@@ -454,6 +464,80 @@ app.post('/api/todo/tasks/:id/assign', memberAuth, async (req, res) => {
             [assigneeId, req.params.id]
         );
         result.affectedRows > 0 ? res.sendStatus(200) : res.status(404).send('Task not found');
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Database error');
+    }
+});
+
+// GET all notes for a task (author name joined in, same pattern as assignee_name)
+app.get('/api/todo/tasks/:id/notes', memberAuth, async (req, res) => {
+    try {
+        const rows = await pool.query(`
+            SELECT ptn.note_id, ptn.task_id, ptn.author_id, ptn.note_text,
+                   ptn.created_at, ptn.updated_at,
+                   pm.display_name AS author_name
+            FROM project_task_notes ptn
+            LEFT JOIN project_members pm ON ptn.author_id = pm.member_id
+            WHERE ptn.task_id = ? AND ptn.is_deleted = FALSE
+            ORDER BY ptn.created_at ASC
+        `, [req.params.id]);
+        res.json(rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Database error' });
+    }
+});
+
+// POST add a note to a task (author comes from the session, same as createTask does for assigneeId)
+app.post('/api/todo/tasks/:id/notes', memberAuth, async (req, res) => {
+    const { noteText } = req.body;
+    if (!noteText || !noteText.trim()) {
+        return res.status(400).send('Note text is required');
+    }
+    const authorId = req.session.memberId;
+    if (!authorId) {
+        return res.status(401).send('Session expired or invalid author');
+    }
+    try {
+        await pool.query(
+            `INSERT INTO project_task_notes (task_id, author_id, note_text) VALUES (?, ?, ?)`,
+            [req.params.id, authorId, noteText.trim()]
+        );
+        res.sendStatus(201);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Database error');
+    }
+});
+
+// PATCH edit a note's text
+app.patch('/api/todo/notes/:id', memberAuth, async (req, res) => {
+    const { noteText } = req.body;
+    if (!noteText || !noteText.trim()) {
+        return res.status(400).send('Note text is required');
+    }
+    try {
+        const result = await pool.query(
+            `UPDATE project_task_notes SET note_text = ?, updated_at = NOW()
+             WHERE note_id = ? AND is_deleted = FALSE`,
+            [noteText.trim(), req.params.id]
+        );
+        result.affectedRows > 0 ? res.sendStatus(200) : res.status(404).send('Note not found');
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Database error');
+    }
+});
+
+// DELETE (soft-delete) a note
+app.delete('/api/todo/notes/:id', memberAuth, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `UPDATE project_task_notes SET is_deleted = TRUE WHERE note_id = ?`,
+            [req.params.id]
+        );
+        result.affectedRows > 0 ? res.sendStatus(200) : res.status(404).send('Note not found');
     } catch (err) {
         console.error(err);
         res.status(500).send('Database error');

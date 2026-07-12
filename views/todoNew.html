@@ -249,32 +249,6 @@
     </div>
 </div>
  
-<!-- TASK NOTES MODAL -->
-<div class="modal-overlay" id="notesModal">
-    <div class="modal">
-        <div class="modal-header">
-            <div class="modal-title">// task_notes</div>
-            <button class="modal-close" onclick="closeModal('notesModal')">&#x2715;</button>
-        </div>
-
-        <div id="notesList" style="display:flex; flex-direction:column; gap:10px; max-height:320px; overflow-y:auto; margin-bottom: var(--space-4, 16px);">
-            <div class="loading">Loading notes...</div>
-        </div>
-
-        <div class="form-group">
-            <label class="form-label" id="note_form_label">Add a note</label>
-            <textarea class="form-control" id="note_text" placeholder="Leave a note or status update... &#10;Press Enter to save. Use Shift + Enter for a new line." maxlength="2000"
-                onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitTaskNote(); }"></textarea>
-        </div>
-
-        <div class="modal-footer">
-            <button class="btn btn-ghost" id="note_cancel_edit_btn" style="display:none;" onclick="cancelEditNote()">Cancel Edit</button>
-            <button class="btn btn-ghost" onclick="closeModal('notesModal')">Close</button>
-            <button class="btn btn-primary" id="note_submit_btn" onclick="submitTaskNote()">Add Note</button>
-        </div>
-    </div>
-</div>
-
 <div id="footer-container"></div>
 <script src="./js/loader.js"></script>
 <script src="./js/theme.js"></script>
@@ -331,191 +305,64 @@
 </script>
  
 <script>
-// Patch renderTasks to inject a Notes button into each row's existing
-// .task-actions div (todo.js already renders Complete/Edit/Reassign/Reopen).
+// Patch renderTasks to append an Actions cell to every row,
+// since the server's todo.js renders only 5 cells.
 (function () {
+    // Wait until todo.js has defined renderTasks
     const _patch = () => {
         if (typeof renderTasks !== 'function') return setTimeout(_patch, 50);
-
+ 
         const _original = renderTasks;
-
+ 
         window.renderTasks = function () {
             _original.apply(this, arguments);
-
+ 
             document.querySelectorAll('#taskBody tr').forEach(tr => {
-                const actions = tr.querySelector('.task-actions');
-                if (!actions) return; // skip empty/loading rows
-                if (actions.querySelector('.notes-btn')) return; // already patched
-
-                const anyBtn = actions.querySelector('[onclick]');
+                // Skip colspan rows (empty/loading states)
+                if (tr.querySelector('[colspan]')) return;
+                // Already patched
+                if (tr.dataset.actionPatched) return;
+                tr.dataset.actionPatched = '1';
+ 
+                // Find task id from the existing onclick on any btn in the row,
+                // e.g. completeTask(123) or openEditModal(123)
+                const anyBtn = tr.querySelector('[onclick]');
                 if (!anyBtn) return;
                 const m = anyBtn.getAttribute('onclick').match(/\((\d+)\)/);
                 if (!m) return;
                 const taskId = m[1];
-                const task = allTasks.find(t => t.task_id === Number(taskId));
-                const noteCount = task ? (task.notes_count || 0) : 0;
-
-                const btn = document.createElement('button');
-                btn.className = 'btn btn-ghost btn-sm notes-btn';
-                btn.title = noteCount > 0 ? (noteCount + ' note' + (noteCount === 1 ? '' : 's')) : 'Notes';
-                btn.style.position = 'relative';
-                btn.innerHTML = '&#x1F4AC;' + (noteCount > 0
-                    ? '<span style="position:absolute; top:-6px; right:-6px; background:var(--accent-2, #6366f1); color:#fff; font-size:0.65rem; font-weight:700; line-height:1; border-radius:999px; padding:2px 4px; min-width:14px; text-align:center;">' + noteCount + '</span>'
-                    : '');
-                btn.setAttribute('onclick', 'openNotesModal(' + taskId + ')');
-                actions.appendChild(btn);
+ 
+                // Read current status from the status badge class
+                const statusBadge = tr.querySelector('[class*="badge-status-"]');
+                let currentStatus = 1;
+                if (statusBadge) {
+                    const sc = statusBadge.className.match(/badge-status-(\d)/);
+                    if (sc) currentStatus = parseInt(sc[1]);
+                }
+ 
+                const td = document.createElement('td');
+                td.innerHTML =
+                    '<div class="task-actions">' +
+                        (currentStatus !== 3
+                            ? '<button class="btn btn-success btn-sm" onclick="completeTask(' + taskId + ')" title="Mark complete">&#x2713;</button>'
+                            : '') +
+                        '<button class="btn btn-warn btn-sm" onclick="openEditModal(' + taskId + ')" title="Edit">&#x270E;</button>' +
+                        '<button class="btn btn-ghost btn-sm" onclick="openAssignModal(' + taskId + ')" title="Reassign">&#x21BA;</button>' +
+                        (currentStatus === 3
+                            ? '<button class="btn btn-ghost btn-sm" onclick="reopenTask(' + taskId + ')" title="Reopen">&#x21A9;</button>'
+                            : '') +
+                    '</div>';
+                tr.appendChild(td);
             });
         };
-
+ 
+        // Re-render immediately so existing tasks get the patch
         window.renderTasks();
     };
-
+ 
     _patch();
 })();
 </script>
-
-<script>
-// ── Task Notes modal ─────────────────────────────────────────────────────
-// Backend endpoints (mirrors the /api/todo/* convention used elsewhere in todo.js):
-//   GET    /api/todo/tasks/{taskId}/notes   -> [{ note_id, task_id, author_id, author_name, note_text, created_at }, ...]
-//   POST   /api/todo/tasks/{taskId}/notes   body: { noteText }   (authorId comes from the session)
-//   PATCH  /api/todo/notes/{noteId}         body: { noteText }   (edits an existing note)
-//   DELETE /api/todo/notes/{noteId}         soft-deletes a note (is_deleted = TRUE)
-// Response rows are expected in snake_case (matching project_task_notes columns,
-// same as allTasks rows), POST/PATCH bodies in camelCase (same as createTask/saveEdit).
-let notesTaskId = null;
-let editingNoteId = null;
-
-function openNotesModal(taskId) {
-    notesTaskId = taskId;
-    cancelEditNote();
-    document.getElementById('notesList').innerHTML = '<div class="loading">Loading notes...</div>';
-    openModal('notesModal');
-    loadTaskNotes(taskId);
-}
-
-async function loadTaskNotes(taskId) {
-    try {
-        const res = await fetch('/api/todo/tasks/' + taskId + '/notes');
-        const notes = await res.json();
-        renderNotes(notes || []);
-    } catch (err) {
-        console.error('Failed to load notes', err);
-        document.getElementById('notesList').innerHTML =
-            '<div class="text-muted" style="font-size:0.85rem;">Couldn\'t load notes.</div>';
-    }
-}
-
-function renderNotes(notes) {
-    const list = document.getElementById('notesList');
-    if (!notes.length) {
-        list.innerHTML = '<div class="text-muted" style="font-size:0.85rem;">No notes yet — be the first to add one.</div>';
-        return;
-    }
-    list.innerHTML = notes.map(n => {
-        const when = n.created_at ? new Date(n.created_at).toLocaleString() : '';
-        return (
-            '<div class="note-item" style="padding:10px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);">' +
-                '<div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin-bottom:4px;">' +
-                    '<span style="font-weight:600; font-size:0.85rem;">' + escHtml(n.author_name || 'Unknown') + '</span>' +
-                    '<span class="text-muted" style="font-size:0.75rem; white-space:nowrap;">' + when + '</span>' +
-                '</div>' +
-                '<div style="font-size:0.9rem; line-height:1.4; white-space:pre-wrap;">' + escHtml(n.note_text) + '</div>' +
-                '<div style="margin-top:6px; display:flex; gap:6px;">' +
-                    '<button class="btn btn-ghost btn-sm" onclick="startEditNote(' + n.note_id + ', this)" title="Edit note">&#x270E;</button>' +
-                    '<button class="btn btn-ghost btn-sm" onclick="deleteTaskNote(' + n.note_id + ')" title="Delete note">&#x1F5D1;</button>' +
-                '</div>' +
-            '</div>'
-        );
-    }).join('');
-}
-
-function startEditNote(noteId, btnEl) {
-    const noteTextEl = btnEl.closest('.note-item').querySelector('div[style*="white-space:pre-wrap"]');
-    editingNoteId = noteId;
-    document.getElementById('note_text').value = noteTextEl ? noteTextEl.textContent : '';
-    document.getElementById('note_form_label').textContent = 'Edit note';
-    document.getElementById('note_submit_btn').textContent = 'Save Note';
-    document.getElementById('note_cancel_edit_btn').style.display = '';
-    document.getElementById('note_text').focus();
-}
-
-function cancelEditNote() {
-    editingNoteId = null;
-    document.getElementById('note_text').value = '';
-    document.getElementById('note_form_label').textContent = 'Add a note';
-    document.getElementById('note_submit_btn').textContent = 'Add Note';
-    document.getElementById('note_cancel_edit_btn').style.display = 'none';
-}
-
-function submitTaskNote() {
-    if (editingNoteId) updateTaskNote();
-    else addTaskNote();
-}
-
-async function addTaskNote() {
-    const textEl = document.getElementById('note_text');
-    const text = textEl.value.trim();
-    if (!text) { alert('Please enter a note.'); return; }
-    if (!notesTaskId) return;
-
-    try {
-        const res = await fetch('/api/todo/tasks/' + notesTaskId + '/notes', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ noteText: text })
-        });
-        if (res.ok) {
-            textEl.value = '';
-            await loadTaskNotes(notesTaskId);
-            if (typeof loadTasks === 'function') loadTasks(); // refresh notes_count badge on the row behind the modal
-        } else {
-            alert('Failed to save note: ' + await res.text());
-        }
-    } catch {
-        alert('Connection error.');
-    }
-}
-
-async function updateTaskNote() {
-    const textEl = document.getElementById('note_text');
-    const text = textEl.value.trim();
-    if (!text) { alert('Please enter a note.'); return; }
-    if (!editingNoteId) return;
-
-    try {
-        const res = await fetch('/api/todo/notes/' + editingNoteId, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ noteText: text })
-        });
-        if (res.ok) {
-            cancelEditNote();
-            await loadTaskNotes(notesTaskId);
-        } else {
-            alert('Failed to update note: ' + await res.text());
-        }
-    } catch {
-        alert('Connection error.');
-    }
-}
-
-async function deleteTaskNote(noteId) {
-    if (!confirm('Delete this note?')) return;
-    try {
-        const res = await fetch('/api/todo/notes/' + noteId, { method: 'DELETE' });
-        if (res.ok) {
-            if (editingNoteId === noteId) cancelEditNote();
-            await loadTaskNotes(notesTaskId);
-            if (typeof loadTasks === 'function') loadTasks(); // refresh notes_count badge on the row behind the modal
-        } else {
-            alert('Failed to delete note: ' + await res.text());
-        }
-    } catch {
-        alert('Connection error.');
-    }
-}
-</script>
-</script>
 </body>
 </html>
+ 

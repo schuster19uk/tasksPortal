@@ -27,3 +27,4 @@ dist/
 build/
 /viewsOld/*
 /old
+projectManagementDB*.txt
